@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.so
+*.dylib
+
+# Virtual environments
+venv/
+env/
+.venv/
+.env/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb.bak
+
+# Data (don't commit raw images)
+data/raw/
+data/processed/
+
+# Experiments output (keep structure, not files)
+experiments/checkpoints/
+experiments/results/
+experiments/logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.code-workspace
+
+# Kaggle
+kaggle.json
+*.json.bak

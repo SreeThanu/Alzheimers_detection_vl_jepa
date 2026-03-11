@@ -1,0 +1,29 @@
+# ============================================================
+# Dataset configuration
+# ============================================================
+
+dataset:
+  image_size: 128                 # Resize all images to 128x128
+  channels: 3                     # Convert grayscale MRI to 3-channel
+
+  # Normalization stats (ImageNet defaults work well for MRI transfer)
+  mean: [0.485, 0.456, 0.406]
+  std:  [0.229, 0.224, 0.225]
+
+  # Augmentation (training only)
+  augmentation:
+    enabled: true
+    random_horizontal_flip: true
+    random_rotation: 10           # degrees
+    color_jitter:
+      brightness: 0.2
+      contrast: 0.2
+
+  # Class-to-prompt mapping
+  class_prompts:
+    NonDemented: "This MRI shows no signs of dementia. The brain appears normal."
+    VeryMildDemented: "This MRI shows very mild dementia with minimal cognitive decline."
+    MildDemented: "This MRI shows mild dementia with noticeable cognitive impairment."
+    ModerateDemented: "This MRI shows moderate dementia with significant brain atrophy."
+
+  val_split: 0.15                 # Fraction of training data used for validation

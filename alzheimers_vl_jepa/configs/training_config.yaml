@@ -1,0 +1,30 @@
+# ============================================================
+# Training hyperparameters — optimized for laptop execution
+# ============================================================
+
+training:
+  epochs: 30
+  batch_size: 16                  # Laptop-friendly batch size
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  optimizer: "adam"               # adam | sgd
+  scheduler: "cosine"            # cosine | step | none
+  num_workers: 2                  # Keep low for laptop
+  pin_memory: false               # Set true only with CUDA
+
+  # Mixed precision — speeds up training on Apple MPS / CUDA
+  use_amp: true
+
+  # Early stopping
+  early_stopping:
+    enabled: true
+    patience: 7
+    monitor: "val_loss"
+    min_delta: 0.001
+
+  # Checkpoint saving
+  save_best_only: true
+  checkpoint_name: "best_model.pt"
+
+  # Logging interval (batches)
+  log_interval: 10

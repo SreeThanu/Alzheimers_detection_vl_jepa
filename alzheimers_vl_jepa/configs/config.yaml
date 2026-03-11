@@ -1,0 +1,23 @@
+# ============================================================
+# Main configuration file — imports settings from sub-configs
+# ============================================================
+
+project:
+  name: "alzheimers_vl_jepa"
+  version: "1.0.0"
+  description: "Alzheimer's Disease Detection using Vision-Language JEPA-style Learning"
+  seed: 42
+
+# Paths
+paths:
+  # data_root should be the PARENT of your dataset sub-folder(s).
+  # The loader will auto-discover AugmentedAlzheimerDataset/, OriginalDataset/, etc. inside here.
+  data_root: "data/raw"
+  processed_dir: "data/processed"
+  checkpoint_dir: "experiments/checkpoints"
+  results_dir: "experiments/results"
+  logs_dir: "experiments/logs"
+
+
+# Device
+device: "auto"  # auto | cpu | cuda | mps

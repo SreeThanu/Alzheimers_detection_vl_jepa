@@ -1,0 +1,20 @@
+# ============================================================
+# Model architecture hyperparameters
+# ============================================================
+
+image_encoder:
+  backbone: "lightweight_cnn"     # lightweight_cnn | tiny_vit
+  input_channels: 3
+  image_size: 128
+  embedding_dim: 256              # Output embedding size
+
+text_encoder:
+  vocab_size: 64                  # Small vocabulary for class prompts
+  embedding_dim: 256              # Must match image_encoder.embedding_dim
+  max_seq_len: 16
+
+vl_jepa:
+  projection_dim: 128             # Hidden size in projection heads
+  num_classes: 4                  # MildDemented, ModerateDemented, NonDemented, VeryMildDemented
+  dropout: 0.3
+  use_text_branch: true           # Set false to use image-only mode
