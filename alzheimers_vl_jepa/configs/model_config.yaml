@@ -18,3 +18,7 @@ vl_jepa:
   num_classes: 4                  # MildDemented, ModerateDemented, NonDemented, VeryMildDemented
   dropout: 0.3
   use_text_branch: true           # Set false to use image-only mode
+  # Fixed class prompts: cache projected text embeddings; eval uses cache (train still runs encoder for grads)
+  cache_text_embeddings: true
+  use_attention_fusion: true       # false = element-wise sum; true = cross-attn (Q=image, K/V=text)
+  fusion_dropout: 0.0              # MultiheadAttention dropout (attention fusion only)

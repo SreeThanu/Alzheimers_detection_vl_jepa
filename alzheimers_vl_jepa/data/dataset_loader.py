@@ -15,7 +15,8 @@ from typing import Callable, Dict, List, Optional, Tuple
 import torch
 from torch.utils.data import Dataset, DataLoader, random_split
 from PIL import Image
-
+import imagehash
+from PIL import Image
 
 # -------------------------------------------------------------------
 # Auto-detection: find the real dataset root even when the extraction
@@ -385,6 +386,8 @@ def build_dataloaders(
     # ── Alternative API: explicit split directories ───────────────
     train_dir: Optional[str] = None,
     test_dir:  Optional[str] = None,
+    # ── Leakage fix: only OriginalDataset/ + stratified split ─────
+    use_original_dataset_only: bool = False,
 ) -> Tuple["DataLoader", "DataLoader", "DataLoader", int]:
     """
     Build leakage-free train / val / test DataLoaders.
@@ -415,6 +418,9 @@ def build_dataloaders(
         max_seq_len:      Token sequence length for the text encoder.
         train_dir:        Explicit train directory (activates mode B).
         test_dir:         Explicit test directory  (activates mode B).
+        use_original_dataset_only: If True, ignore AugmentedAlzheimerDataset and use only
+                          ``OriginalDataset`` under ``data_root``, with stratified 70/15/15
+                          (or ``train_frac`` / ``val_frac`` from args). Config-driven.
 
     Returns:
         (train_loader, val_loader, test_loader, vocab_size)
@@ -435,6 +441,32 @@ def build_dataloaders(
             class_prompts=class_prompts,
             max_seq_len=max_seq_len,
         )
+
+    # ── Mode A1: OriginalDataset only (stratified train/val/test) ────
+    if use_original_dataset_only:
+        train_ds, val_ds, test_ds, vocab_sz = get_stratified_splits(
+            data_root,
+            train_transform=train_transform,
+            val_transform=val_transform,
+            train_frac=train_frac,
+            val_frac=val_frac,
+            seed=seed,
+            class_prompts=class_prompts,
+            max_seq_len=max_seq_len,
+        )
+        train_loader = DataLoader(
+            train_ds, batch_size=batch_size, shuffle=True,
+            num_workers=num_workers, pin_memory=False, drop_last=True,
+        )
+        val_loader = DataLoader(
+            val_ds, batch_size=batch_size, shuffle=False,
+            num_workers=num_workers, pin_memory=False,
+        )
+        test_loader = DataLoader(
+            test_ds, batch_size=batch_size, shuffle=False,
+            num_workers=num_workers, pin_memory=False,
+        )
+        return train_loader, val_loader, test_loader, vocab_sz
 
     prompts   = class_prompts or DEFAULT_CLASS_PROMPTS
     tokenizer = SimpleTokenizer(prompts, max_seq_len=max_seq_len)
@@ -614,6 +646,11 @@ class _IndexedImageDataset(Dataset):
     def __len__(self) -> int:
         return len(self.indices)
 
+    def get_image_path(self, idx: int) -> str:
+        """Filesystem path for sample ``idx`` in this subset (for evaluation logging)."""
+        real_idx = self.indices[idx]
+        return str(self.paths[real_idx])
+
     def __getitem__(self, idx: int):
         real_idx  = self.indices[idx]
         img_path  = self.paths[real_idx]
@@ -623,11 +660,241 @@ class _IndexedImageDataset(Dataset):
         if self.transform:
             image = self.transform(image)
 
-        class_name = CLASS_NAMES[label]
-        prompt     = self.prompts.get(class_name, "")
-        tokens     = self.tokenizer.encode(prompt)
+        # 🔥 No text leakage — use dummy tokens
+        tokens = torch.zeros(self.tokenizer.max_seq_len, dtype=torch.long)
 
         return image, tokens, label
+
+
+# -------------------------------------------------------------------
+# OriginalDataset only + stratified 70/15/15 (no AugmentedAlzheimerDataset)
+# -------------------------------------------------------------------
+_ORIGINAL_DATASET_DIR_NAMES: Tuple[str, ...] = (
+    "OriginalDataset",
+    "original_dataset",
+)
+
+
+def find_original_dataset_under_root(parent: Path) -> Path:
+    """
+    Locate ``OriginalDataset`` under a configurable parent (e.g. ``paths.data_root``).
+
+    Checks ``parent/OriginalDataset`` and one level of nesting
+    (``parent/<any>/OriginalDataset``).
+    """
+    parent = parent.resolve()
+    if not parent.is_dir():
+        raise FileNotFoundError(f"Dataset parent is not a directory: {parent}")
+
+    for name in _ORIGINAL_DATASET_DIR_NAMES:
+        direct = parent / name
+        if direct.is_dir():
+            return direct
+
+    for child in sorted(parent.iterdir()):
+        if not child.is_dir():
+            continue
+        for name in _ORIGINAL_DATASET_DIR_NAMES:
+            nested = child / name
+            if nested.is_dir():
+                return nested
+
+    raise FileNotFoundError(
+        f"No OriginalDataset folder found under {parent}. "
+        f"Expected {parent / 'OriginalDataset'} or similar. "
+        "Set dataset.use_original_dataset_only: false to use the legacy multi-source loader."
+    )
+
+
+def _collect_paths_from_original_root(original_root: Path) -> Tuple[List[Path], List[int]]:
+    """Collect (path, label) from OriginalDataset (flat class dirs or train/ + test/ layout)."""
+    _valid = AlzheimerMRIDataset.VALID_EXTENSIONS
+    paths: List[Path] = []
+    labels: List[int] = []
+
+    if (original_root / "train").is_dir():
+        sub_roots = [original_root / "train", original_root / "test"]
+    else:
+        sub_roots = [original_root]
+
+    for sub in sub_roots:
+        for class_name in CLASS_NAMES:
+            class_dir = sub / class_name
+            if not class_dir.is_dir():
+                continue
+            label = CLASS_TO_IDX[class_name]
+            for f in class_dir.iterdir():
+                if f.suffix.lower() in _valid:
+                    paths.append(f.resolve())
+                    labels.append(label)
+
+    if not paths:
+        raise RuntimeError(
+            f"No images found under OriginalDataset root {original_root}. "
+            f"Expected class folders: {CLASS_NAMES}"
+        )
+    return paths, labels
+
+
+def _stratified_train_val_test_indices(
+    labels: List[int],
+    train_frac: float,
+    val_frac: float,
+    seed: int,
+) -> Tuple[List[int], List[int], List[int]]:
+    """Two-stage sklearn stratified split → train / val / test index lists."""
+    from sklearn.model_selection import train_test_split as _tts
+
+    test_frac = 1.0 - train_frac - val_frac
+    if test_frac <= 0 or abs(train_frac + val_frac + test_frac - 1.0) > 1e-6:
+        raise ValueError("train_frac + val_frac must be < 1.0 (positive test fraction required).")
+
+    idx_all = list(range(len(labels)))
+    idx_train, idx_temp, _, lbl_temp = _tts(
+        idx_all,
+        labels,
+        test_size=(val_frac + test_frac),
+        stratify=labels,
+        random_state=seed,
+    )
+    rel_val = val_frac / (val_frac + test_frac)
+    idx_val, idx_test, _, _ = _tts(
+        idx_temp,
+        lbl_temp,
+        test_size=(1.0 - rel_val),
+        stratify=lbl_temp,
+        random_state=seed,
+    )
+    return list(idx_train), list(idx_val), list(idx_test)
+
+
+def get_stratified_splits(
+    root_dir: str,
+    train_transform: Optional[Callable] = None,
+    val_transform: Optional[Callable] = None,
+    *,
+    train_frac: float = 0.70,
+    val_frac: float = 0.15,
+    seed: int = 42,
+    class_prompts: Optional[Dict[str, str]] = None,
+    max_seq_len: int = 16,
+) -> Tuple[Dataset, Dataset, Dataset, int]:
+
+    import os
+    import imagehash
+    from PIL import Image
+    from pathlib import Path
+    from sklearn.model_selection import GroupShuffleSplit
+
+    prompts = class_prompts or DEFAULT_CLASS_PROMPTS
+    tokenizer = SimpleTokenizer(prompts, max_seq_len=max_seq_len)
+
+    # ---------------------------------------------------------
+    # LOAD DATA
+    # ---------------------------------------------------------
+    original_root = find_original_dataset_under_root(Path(root_dir))
+    paths, labels = _collect_paths_from_original_root(original_root)
+
+    # ---------------------------------------------------------
+    # 🔥 STEP 1: DEDUPLICATION
+    # ---------------------------------------------------------
+    print("[INFO] Removing duplicate / near-duplicate images...")
+
+    unique_hashes = {}
+    filtered_paths = []
+    filtered_labels = []
+
+    for p, l in zip(paths, labels):
+        try:
+            img = Image.open(p)
+            h = str(imagehash.phash(img))
+        except Exception:
+            continue
+
+        if h not in unique_hashes:
+            unique_hashes[h] = True
+            filtered_paths.append(p)
+            filtered_labels.append(l)
+
+    print(f"[INFO] Before dedup: {len(paths)}")
+    print(f"[INFO] After dedup : {len(filtered_paths)}")
+
+    paths = filtered_paths
+    labels = filtered_labels
+
+    # ---------------------------------------------------------
+    # 🔥 STEP 2: GROUPING (CRITICAL FIX)
+    # ---------------------------------------------------------
+    def get_group_id(path):
+        filename = os.path.basename(path)
+        name = os.path.splitext(filename)[0]
+        base = name.split('_')[0]  # group by base image
+        return base
+
+    groups = [get_group_id(p) for p in paths]
+
+    # ---------------------------------------------------------
+    # 🔥 STEP 3: GROUP-BASED SPLIT
+    # ---------------------------------------------------------
+    gss = GroupShuffleSplit(n_splits=1, test_size=(1 - train_frac), random_state=seed)
+    train_idx, temp_idx = next(gss.split(paths, labels, groups))
+
+    temp_paths = [paths[i] for i in temp_idx]
+    temp_labels = [labels[i] for i in temp_idx]
+    temp_groups = [groups[i] for i in temp_idx]
+
+    # Split temp → val + test
+    val_ratio = val_frac / (1 - train_frac)
+
+    gss2 = GroupShuffleSplit(n_splits=1, test_size=(1 - val_ratio), random_state=seed)
+    val_idx_rel, test_idx_rel = next(gss2.split(temp_paths, temp_labels, temp_groups))
+
+    idx_train = train_idx
+    idx_val = [temp_idx[i] for i in val_idx_rel]
+    idx_test = [temp_idx[i] for i in test_idx_rel]
+
+    # ---------------------------------------------------------
+    # 🔍 DEBUG CHECK (VERY IMPORTANT)
+    # ---------------------------------------------------------
+    train_groups = set([groups[i] for i in idx_train])
+    val_groups = set([groups[i] for i in idx_val])
+
+    print(f"[CHECK] Group overlap (train vs val): {len(train_groups & val_groups)}")
+
+    # ---------------------------------------------------------
+    # LOGGING
+    # ---------------------------------------------------------
+    print(f"[dataset] OriginalDataset only: {original_root}")
+    print(f"[dataset] Total images: {len(paths)}")
+
+    for i, name in enumerate(CLASS_NAMES):
+        c = labels.count(i)
+        print(f"          {name:25s}: {c:6d}")
+
+    print(
+        f"[dataset] Group split → Train: {len(idx_train)} | "
+        f"Val: {len(idx_val)} | Test: {len(idx_test)}"
+    )
+
+    # ---------------------------------------------------------
+    # BUILD DATASETS
+    # ---------------------------------------------------------
+    train_ds = _IndexedImageDataset(
+        paths, labels, idx_train,
+        transform=train_transform, tokenizer=tokenizer, prompts=prompts,
+    )
+
+    val_ds = _IndexedImageDataset(
+        paths, labels, idx_val,
+        transform=val_transform, tokenizer=tokenizer, prompts=prompts,
+    )
+
+    test_ds = _IndexedImageDataset(
+        paths, labels, idx_test,
+        transform=val_transform, tokenizer=tokenizer, prompts=prompts,
+    )
+
+    return train_ds, val_ds, test_ds, tokenizer.vocab_size
 
 
 # -------------------------------------------------------------------

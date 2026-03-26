@@ -26,5 +26,13 @@ training:
   save_best_only: true
   checkpoint_name: "best_model.pt"
 
+  # Class imbalance: inverse-frequency weights in CrossEntropyLoss (train/val)
+  use_class_weights: true
+
   # Logging interval (batches)
   log_interval: 10
+
+# Evaluation extras (used by evaluation/evaluate.py; temperature fit uses val_loader in train.py)
+evaluation:
+  gradcam_num_samples: 8           # Save Grad-CAM overlays for first N test images (0 = off)
+  temperature_scaling: true       # Fit scalar T on val after training; evaluate divides logits by T

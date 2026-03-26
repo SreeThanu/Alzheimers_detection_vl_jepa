@@ -63,6 +63,7 @@ class Trainer:
         use_amp:         Use automatic mixed precision
         early_stopping_patience: Epochs with no improvement before stopping
         contrastive_weight: Weight for contrastive loss (0 = disable)
+        class_weights: Optional tensor [C] for CrossEntropyLoss; None = unweighted.
     """
 
     def __init__(
@@ -79,6 +80,7 @@ class Trainer:
         use_amp: bool = True,
         early_stopping_patience: int = 7,
         contrastive_weight: float = 0.1,
+        class_weights: Optional[torch.Tensor] = None,
     ):
         self.model              = model.to(device)
         self.train_loader       = train_loader
@@ -95,8 +97,12 @@ class Trainer:
         self._amp_enabled = _amp_ok
         self._amp_device_type = device.type if _amp_ok else "cpu"
 
-        # Loss and optimiser
-        self.criterion  = nn.CrossEntropyLoss()
+        # Loss and optimiser (optional class weights from training-set distribution)
+        if class_weights is not None:
+            cw = class_weights.to(device).float()
+            self.criterion = nn.CrossEntropyLoss(weight=cw)
+        else:
+            self.criterion = nn.CrossEntropyLoss()
         self.optimizer  = torch.optim.Adam(
             model.parameters(), lr=lr, weight_decay=weight_decay
         )
@@ -171,7 +177,7 @@ class Trainer:
             with torch.amp.autocast(
                 device_type=self._amp_device_type, enabled=self._amp_enabled
             ):
-                out = self.model(images, tokens)
+                out = self.model(images, tokens, labels=labels)
                 cls_loss = self.criterion(out["logits"], labels)
 
                 # Optional contrastive alignment
@@ -200,6 +206,9 @@ class Trainer:
     @torch.no_grad()
     def _eval_epoch(self):
         self.model.eval()
+        if getattr(self.model, "cache_text_embeddings", False):
+            self.model.update_text_embedding_cache()
+
         total_loss, correct, total = 0.0, 0, 0
 
         for images, tokens, labels in tqdm(self.val_loader, desc="  Val  ", leave=False):
@@ -207,7 +216,7 @@ class Trainer:
             tokens = tokens.to(self.device)
             labels = labels.to(self.device)
 
-            out  = self.model(images, tokens)
+            out  = self.model(images, tokens, labels=labels)
             loss = self.criterion(out["logits"], labels)
 
             total_loss += loss.item() * images.size(0)

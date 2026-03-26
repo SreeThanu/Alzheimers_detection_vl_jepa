@@ -3,6 +3,11 @@
 # ============================================================
 
 dataset:
+  # Use only OriginalDataset/ under paths.data_root (excludes AugmentedAlzheimerDataset).
+  use_original_dataset_only: true
+  train_frac: 0.70                # Stratified split fractions (test = 1 - train - val)
+  val_frac: 0.15
+
   image_size: 128                 # Resize all images to 128x128
   channels: 3                     # Convert grayscale MRI to 3-channel
 
