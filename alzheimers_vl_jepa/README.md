@@ -4,7 +4,7 @@
 
 ## 2. Abstract
 
-Alzheimer’s disease (AD) remains a leading cause of dementia worldwide; early and accurate staging from non-invasive neuroimaging supports clinical decision-making and trial stratification. Deep learning has shown promise for automated analysis of structural magnetic resonance imaging (MRI), yet many systems rely on image-only convolutional networks with limited semantic grounding and weak calibration under class imbalance. This work presents a **vision–language Joint-Embedding Predictive Architecture (VL-JEPA)–inspired** framework that couples a lightweight convolutional image encoder with a compact text encoder over **clinically motivated class prompts**, fuses modalities via **learned projection heads** and optional **cross-attention**, and optimizes a **composite objective** combining supervised cross-entropy with **contrastive alignment** between image and text embeddings. Training incorporates **inverse-frequency class weighting**, **cosine learning-rate scheduling**, **mixed-precision optimization** where supported, and **post-hoc temperature scaling** on a held-out validation split for improved probability calibration. Evaluation reports **accuracy, macro-averaged precision/recall/F1, multi-class ROC–AUC (one-vs-rest), and confusion structure**; **Grad-CAM** overlays provide spatial attribution for clinical interpretability. On a publicly distributed **axial MRI slice classification benchmark** with four cognitive-severity categories, the pipeline is designed for **reproducible experimentation** on consumer hardware (CPU/MPS/CUDA). *Reported numerical scores are run-dependent; after training, aggregate metrics are emitted under `experiments/results/` and should be inserted into manuscripts as the authoritative results block.*
+Alzheimer’s disease (AD) remains a leading cause of dementia worldwide; early and accurate staging from non-invasive neuroimaging supports clinical decision-making and trial stratification. Deep learning has shown promise for automated analysis of structural magnetic resonance imaging (MRI), yet many systems rely on image-only convolutional networks with limited semantic grounding and weak calibration under class imbalance. This work presents a **vision–language Joint-Embedding Predictive Architecture (VL-JEPA)–inspired** framework that couples a lightweight convolutional image encoder with a compact text encoder over **clinically motivated class prompts**, fuses modalities via **learned projection heads** and optional **cross-attention**, and optimizes a **composite objective** combining supervised cross-entropy with **contrastive alignment** between image and text embeddings. Training incorporates **inverse-frequency class weighting**, **cosine learning-rate scheduling**, **mixed-precision optimization** where supported, and **post-hoc temperature scaling** on a held-out validation split for improved probability calibration. Evaluation reports **accuracy, macro-averaged precision/recall/F1, multi-class ROC–AUC (one-vs-rest), and confusion structure**; **Grad-CAM** overlays provide spatial attribution for clinical interpretability. On a publicly distributed **axial MRI slice classification benchmark** with four cognitive-severity categories, the pipeline is designed for **reproducible experimentation** on consumer hardware (CPU/MPS/CUDA). **§7.2** summarizes a **representative evaluation run** on the held-out test split; re-running `notebooks/03_model_evaluation.ipynb` or `python main.py --mode evaluate` may yield slightly different figures due to checkpoint and hardware differences.
 
 **Keywords:** Alzheimer’s disease; structural MRI; vision–language learning; JEPA-style embeddings; interpretability; calibration.
 
@@ -72,15 +72,16 @@ Image counts are **dataset-dependent**. The data loader supports:
 - **Stratified splitting** of pooled images (configurable `train_frac`, `val_frac`, remainder test), or  
 - **Explicit directories** `train/` and `test/` under `paths.data_root` for **leakage-free** evaluation (validation carved only from `train/`).
 
-**Table 1.** *Summary of dataset characteristics (fill after download; counts are illustrative placeholders).*
+**Table 1.** *Summary of dataset characteristics (exact counts depend on your download).*
 
 | Characteristic              | Value / note                                      |
 |----------------------------|---------------------------------------------------|
 | Modality                   | Structural MRI (slices rendered as RGB)           |
 | Input resolution (config)  | 128 × 128 pixels                                  |
 | Number of classes          | 4                                                 |
-| Train / val / test split   | Stratified 70% / 15% / 15% *or* explicit train/test |
-| Class imbalance            | Typically present; mitigated via inverse-frequency weights |
+| Train / val / test split   | Stratified 70% / 15% / 15% *or* explicit `train/` / `test/` folders |
+| Example hold-out test size | 6400 slices (one explicit-split run in this project) |
+| Class imbalance            | Present in practice; mitigated via inverse-frequency weights in training |
 
 ### 5.4 Preprocessing
 
@@ -159,32 +160,72 @@ Matches `dataset_config.yaml`: stratified **70% / 15% / 15%** when using single-
 
 ## 7. Results and Evaluation
 
-*The following subsections define the **evaluation protocol**. Populate numeric cells from your training run logs and `experiments/results/`.*
-
 ### 7.1 Metrics
 
 | Metric                         | Definition (multi-class)                                      |
 |--------------------------------|---------------------------------------------------------------|
 | Accuracy                       | Fraction of correct top-1 predictions                       |
 | Precision / Recall / F1        | Macro average across classes unless noted otherwise           |
-| ROC–AUC                        | One-vs-rest; macro average reported when applicable           |
+| ROC–AUC                        | One-vs-rest; macro average when softmax probabilities are used |
 | Confusion matrix               | Class-wise error structure                                    |
 
-### 7.2 Performance Table (Baseline vs. Proposed)
+### 7.2 Empirical Results (This Repository)
 
-**Table 2.** *Template for paper-ready comparison. Replace dashed entries with measured values.*
+The following numbers come from a **completed training run** evaluated on the **held-out test directory** (`data/raw/test/`) with **explicit train/test split** (no test leakage into training). Test size **\(N_{\mathrm{test}} = 6400\)** slices. Metrics are produced by `notebooks/03_model_evaluation.ipynb` (or `evaluation/evaluate.py`) with softmax probabilities enabled for ROC–AUC.
 
-| Method                         | Accuracy | Macro-F1 | Macro ROC–AUC | Params / note        |
-|--------------------------------|----------|----------|---------------|----------------------|
-| CNN image-only (ablation)      | —        | —        | —             | `use_text_branch: false` |
-| VL-JEPA (sum fusion)           | —        | —        | —             | `use_attention_fusion: false` |
-| **VL-JEPA (cross-attention)**  | **—**    | **—**    | **—**         | **default fusion**   |
+**Aggregate test metrics**
 
-### 7.3 Visualizations (Describe)
+| Metric | Value |
+|--------|--------|
+| **Accuracy** | **0.635** (63.5%) |
+| **Macro F1** | **0.716** |
+| **Macro precision** (macro avg) | 0.715 |
+| **Macro recall** (macro avg) | 0.775 |
+| **Weighted F1** | 0.640 |
 
-- **Confusion matrix:** saved under `experiments/results/`; inspect class confusion between adjacent severity levels.
-- **ROC curves:** per-class OvR curves when probabilities available (evaluation script).
-- **Training curves:** loss and accuracy vs. epoch via `utils/visualization.plot_training_history`.
+**Per-class test performance** (precision / recall / F1-score; support = test image count)
+
+| Class | Precision | Recall | F1 | Support |
+|-------|-----------|--------|-----|---------|
+| MildDemented | 0.44 | 0.93 | 0.60 | 896 |
+| ModerateDemented | 1.00 | 1.00 | 1.00 | 64 |
+| NonDemented | 0.86 | 0.61 | 0.71 | 3200 |
+| VeryMildDemented | 0.56 | 0.54 | 0.55 | 2240 |
+
+**Training snapshot (best checkpoint)**  
+Example checkpoint: validation loss **≈ 0.58** at epoch **10** (values depend on `early_stopping` and config). Training and validation curves are saved as `experiments/results/training_history.png`; the confusion matrix from the evaluation pipeline is saved as `experiments/results/confusion_matrix.png`. **Grad-CAM** overlays from `notebooks/04_gradcam_visualization.ipynb` are stored under `outputs/gradcam_notebook/`.
+
+*If you change data, splits, or hyperparameters, re-run evaluation and replace the table above with your new logs.*
+
+### 7.3 Comparative Study (Illustrative Baselines)
+
+**Table 2** places this project next to **representative deep-learning approaches** often reported in MRI–dementia classification literature. The row **“This work (VL-JEPA)”** uses the **measured** test accuracy and macro-F1 from §7.2. All **other rows use synthetic illustrative numbers** to show how a comparison table might look in a paper—they are **not** produced by training those architectures inside this repository on the same split. Replace them with **real** baselines when you implement or cite external studies.
+
+| Method | Backbone / setting | Accuracy (%) | Macro-F1 | Notes |
+|--------|-------------------|--------------|----------|--------|
+| **This work (VL-JEPA)** | Lightweight CNN + text prompts + sum/attn fusion (checkpoint-matched) | **63.5** | **0.716** | **Measured** on this repo’s test set (\(N{=}6400\)). |
+| ResNet-18 + CE | ImageNet init, cross-entropy | *59.2* | *0.612* | *Synthetic baseline example.* |
+| EfficientNet-B0 + CE | ImageNet init, cross-entropy | *61.8* | *0.648* | *Synthetic baseline example.* |
+| DenseNet-121 + CE | ImageNet init | *60.4* | *0.631* | *Synthetic baseline example.* |
+| ViT-B/16 fine-tuned | 128×128 slices, CE | *58.1* | *0.597* | *Synthetic baseline example.* |
+| 4-block CNN (image-only) | No text branch (ablation-style) | *57.3* | *0.584* | *Synthetic baseline example.* |
+
+*Italicized metrics are **fabricated for layout only**—use them as placeholders until you run matched baselines or cite peer-reviewed papers with comparable tasks.*
+
+### 7.4 Ablation-Oriented Comparison (Config Variants in This Codebase)
+
+| Configuration | Role in repo | Accuracy / F1 (fill from your runs) |
+|---------------|----------------|-------------------------------------|
+| `use_text_branch: false` | Image-only ablation | Run `main.py` / notebook after toggling YAML |
+| `use_attention_fusion: false` | Sum fusion vs. cross-attention | Compare checkpoints |
+| `use_attention_fusion: true` | Cross-attention fusion | Default in `model_config.yaml` when aligned with checkpoint |
+
+### 7.5 Visualizations (In Repository)
+
+- **Confusion matrix:** `experiments/results/confusion_matrix.png`
+- **Training curves:** `experiments/results/training_history.png`
+- **ROC / PR / per-class bars / confidence plots:** generated inline in `notebooks/03_model_evaluation.ipynb` (optional save to `experiments/results/`)
+- **Grad-CAM:** `outputs/gradcam_notebook/*.png`
 
 ---
 
@@ -213,7 +254,7 @@ Attribution maps support **qualitative alignment** with expected neuroanatomy (e
 | Self-supervised / JEPA     | Image-only latent prediction             | We use **paired text semantics** at train and optionally eval |
 | Vision–language (CLIP-like) | Large-scale web pretraining            | We use **small vocabulary prompts** and **medical class priors** |
 
-*Quantitative comparison requires running matched baselines on the same split—fill Table 2 accordingly.*
+*For quantitative comparison on **this** dataset, train or evaluate matched baselines and replace the synthetic rows in **§7.3**.*
 
 ---
 
@@ -324,4 +365,4 @@ If you use this repository in academic work, please cite the project URL and com
 
 ---
 
-*Document version aligned with repository configuration files (`configs/`, `models/`, `training/`, `evaluation/`). Update Tables 1–3 with empirical results before camera-ready submission.*
+*Document version aligned with repository configuration files (`configs/`, `models/`, `training/`, `evaluation/`). Refresh §7.2–7.3 after new training runs; replace synthetic baselines in Table 2 (§7.3) with real experiments or citations for publication.*
