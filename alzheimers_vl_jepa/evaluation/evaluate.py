@@ -27,13 +27,15 @@ from tqdm import tqdm
 
 from utils.config import load_config
 from utils.helpers import set_seed, get_device
-from data.dataset_loader import build_dataloaders, CLASS_NAMES
+from data.dataset_loader import CLASS_NAMES, SimpleTokenizer, build_dataloaders
 from data.preprocessing import get_val_transform
 from models.vl_jepa_model import VLJEPAModel
 from evaluation.metrics import compute_metrics
 from utils.visualization import plot_confusion_matrix
 from utils.gradcam import save_gradcam_overlay
 from utils.calibration import load_temperature, apply_temperature
+from utils.paths import find_checkpoint_for_inference, resolve_project_path
+from utils.vl_jepa_checkpoint import apply_checkpoint_arch_to_model_kwargs
 
 
 def _resolve_sample_path(dataset, index_in_loader_order: int) -> str:
@@ -72,7 +74,7 @@ def evaluate_model(
 
     # ── Build test loader if not provided ───────────────────────────
     if test_loader is None:
-        data_root = cfg["paths"]["data_root"]
+        data_root = resolve_project_path(cfg["paths"]["data_root"])
         ds_cfg    = cfg["dataset"]
         val_tf    = get_val_transform(ds_cfg["image_size"])
         _, _, test_loader, vocab_size = build_dataloaders(
@@ -93,19 +95,12 @@ def evaluate_model(
 
     # ── Load model if not provided ───────────────────────────────────
     if model is None:
-        ckpt_path = checkpoint_path or os.path.join(
-            cfg["paths"]["checkpoint_dir"],
-            cfg["training"]["checkpoint_name"],
-        )
-        if not os.path.exists(ckpt_path):
-            raise FileNotFoundError(
-                f"Checkpoint not found: {ckpt_path}\n"
-                "Train the model first with: python main.py"
-            )
+        ckpt_path = find_checkpoint_for_inference(cfg, checkpoint_path, allow_fallback=True)
         val_tf = get_val_transform(cfg["dataset"]["image_size"])
         ds_cfg = cfg["dataset"]
+        data_root = resolve_project_path(cfg["paths"]["data_root"])
         _, _, _, vocab_size = build_dataloaders(
-            data_root       = cfg["paths"]["data_root"],
+            data_root       = data_root,
             train_transform = val_tf,
             val_transform   = val_tf,
             batch_size      = 1,
@@ -117,32 +112,17 @@ def evaluate_model(
             val_frac        = float(ds_cfg.get("val_frac", 0.15)),
             use_original_dataset_only=bool(ds_cfg.get("use_original_dataset_only", False)),
         )
-        vlj = cfg["vl_jepa"]
         ds_prompts = cfg["dataset"]["class_prompts"]
-        use_txt = bool(vlj.get("use_text_branch", True))
-        cache_txt = bool(vlj.get("cache_text_embeddings", False)) and use_txt
-        class_tokens = None
-        if cache_txt:
-            from data.dataset_loader import SimpleTokenizer
+        mx = cfg["text_encoder"]["max_seq_len"]
+        tok = SimpleTokenizer(ds_prompts, max_seq_len=mx)
+        class_tokens_stacked = torch.stack([tok.encode(ds_prompts[n]) for n in CLASS_NAMES])
 
-            mx = cfg["text_encoder"]["max_seq_len"]
-            tok = SimpleTokenizer(ds_prompts, max_seq_len=mx)
-            class_tokens = torch.stack([tok.encode(ds_prompts[n]) for n in CLASS_NAMES])
-
-        model = VLJEPAModel(
-            vocab_size            = vocab_size,
-            embedding_dim         = cfg["image_encoder"]["embedding_dim"],
-            projection_dim        = vlj["projection_dim"],
-            num_classes           = num_classes,
-            dropout               = vlj["dropout"],
-            use_text              = use_txt,
-            cache_text_embeddings = cache_txt,
-            class_token_ids       = class_tokens,
-            use_attention_fusion  = bool(vlj.get("use_attention_fusion", False)) and use_txt,
-            fusion_dropout        = float(vlj.get("fusion_dropout", 0.0)),
-        )
         ckpt = torch.load(ckpt_path, map_location=device)
-        model.load_state_dict(ckpt["model_state"])
+        sd = ckpt["model_state"]
+        model = VLJEPAModel(
+            **apply_checkpoint_arch_to_model_kwargs(cfg, sd, vocab_size, class_tokens_stacked)
+        )
+        model.load_state_dict(sd)
         print(
             f"Loaded checkpoint from epoch {ckpt['epoch']} "
             f"(val loss: {ckpt['val_loss']:.4f})"

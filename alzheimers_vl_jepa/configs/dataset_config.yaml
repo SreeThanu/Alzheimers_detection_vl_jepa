@@ -3,8 +3,9 @@
 # ============================================================
 
 dataset:
-  # Use only OriginalDataset/ under paths.data_root (excludes AugmentedAlzheimerDataset).
-  use_original_dataset_only: true
+  # true → expects data_root/OriginalDataset/ only (stratified split).
+  # false → legacy layout: data_root with train/ + test/ and/or dataset subfolders (matches Kaggle-style raw data).
+  use_original_dataset_only: false
   train_frac: 0.70                # Stratified split fractions (test = 1 - train - val)
   val_frac: 0.15
 

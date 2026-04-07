@@ -31,6 +31,9 @@ experiments/checkpoints/
 experiments/results/
 experiments/logs/
 
+# Notebook / evaluation exports (Grad-CAM PNGs, CSVs, etc.)
+outputs/
+
 # OS
 .DS_Store
 Thumbs.db

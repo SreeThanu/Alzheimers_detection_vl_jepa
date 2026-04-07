@@ -189,6 +189,7 @@ def save_gradcam_overlay(
     mean: Tuple[float, float, float] = (0.485, 0.456, 0.406),
     std: Tuple[float, float, float] = (0.229, 0.224, 0.225),
     max_seq_len: int = 16,
+    alpha: float = 0.45,
 ) -> None:
     """Run ``generate_gradcam`` and write a jet-overlay PNG to ``save_path``."""
     path = Path(save_path)
@@ -197,5 +198,5 @@ def save_gradcam_overlay(
         model, image_tensor, target_class, device=device, max_seq_len=max_seq_len
     )
     rgb = tensor_to_rgb_uint8(image_tensor, mean=mean, std=std)
-    overlay = overlay_heatmap(rgb, heatmap)
+    overlay = overlay_heatmap(rgb, heatmap, alpha=alpha)
     Image.fromarray(overlay).save(path)
