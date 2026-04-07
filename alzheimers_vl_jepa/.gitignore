@@ -26,13 +26,13 @@ env/
 data/raw/
 data/processed/
 
-# Experiments output (keep structure, not files)
+# Experiments output — checkpoints/logs stay local; PNG figures are tracked for demos
 experiments/checkpoints/
-experiments/results/
 experiments/logs/
 
-# Notebook / evaluation exports (Grad-CAM PNGs, CSVs, etc.)
-outputs/
+# Predictions / exports can grow large — keep PNGs, ignore CSV dumps
+outputs/**/*.csv
+experiments/results/**/*.csv
 
 # OS
 .DS_Store
